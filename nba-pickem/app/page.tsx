@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   TEAMS, ROUND_INFO, PLAYERS, INITIAL_SERIES, resolveBracket, computePoints,
   type Series, type RoundKey, type Team,
 } from "@/lib/bracket";
 import { supabase, hasSupabase } from "@/lib/supabase";
+import { fetchNBAScoreboard, matchGamesToSeries } from "@/lib/espn";
 
 const ADMIN_PASSWORD = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || "stgs2026";
+const ESPN_POLL_INTERVAL = 60_000; // 60s
 
 type SeriesState = {
   highWins: number;
@@ -31,15 +33,29 @@ export default function HomePage() {
   const [adminMode, setAdminMode] = useState(false);
   const [adminInput, setAdminInput] = useState("");
   const [showAdmin, setShowAdmin] = useState(false);
+  const [showPlayerLogin, setShowPlayerLogin] = useState(false);
+  const [loginName, setLoginName] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
   const [toast, setToast] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [liveStatus, setLiveStatus] = useState<Record<string, string>>({}); // seriesId -> "Q3 4:22"
+  const [lastFetch, setLastFetch] = useState<Date | null>(null);
+
+  // Refs let the ESPN polling loop see latest state/updater without re-subscribing
+  const seriesStateRef = useRef<Record<string, SeriesState>>({});
+  const updateSeriesStateRef = useRef<(id: string, updates: Partial<SeriesState>) => void>(() => {});
 
   // Restore session
   useEffect(() => {
-    const p = typeof window !== "undefined" ? localStorage.getItem("nba_player") : null;
-    if (p && PLAYERS.includes(p)) setCurrentPlayer(p);
-    const a = typeof window !== "undefined" ? localStorage.getItem("nba_admin") : null;
+    if (typeof window === "undefined") return;
+    const a = localStorage.getItem("nba_admin");
     if (a === "1") setAdminMode(true);
+    const p = localStorage.getItem("nba_player");
+    const auth = localStorage.getItem("nba_player_auth");
+    // Restore player only if authenticated, OR if admin (admin can pick as anyone)
+    if (p && PLAYERS.includes(p) && (auth === "1" || a === "1")) {
+      setCurrentPlayer(p);
+    }
   }, []);
 
   // Load picks + series state from Supabase (or in-memory fallback)
@@ -74,6 +90,50 @@ export default function HomePage() {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // Poll ESPN for live game data
+  useEffect(() => {
+    if (!loaded) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const tick = async () => {
+      const games = await fetchNBAScoreboard();
+      if (cancelled) return;
+      const built = INITIAL_SERIES.map((s) => {
+        const st = seriesStateRef.current[s.id];
+        return st
+          ? { ...s, highWins: st.highWins, lowWins: st.lowWins, winner: st.winner ?? undefined, game1Started: st.game1Started }
+          : s;
+      });
+      const resolved = resolveBracket(built);
+      const updates = matchGamesToSeries(games, resolved);
+      const newLive: Record<string, string> = {};
+      for (const u of updates) {
+        if (u.statusDetail) newLive[u.seriesId] = u.statusDetail;
+        const cur = seriesStateRef.current[u.seriesId];
+        const desired: Partial<SeriesState> = {};
+        if (u.game1Started && !cur?.game1Started) desired.game1Started = true;
+        if (typeof u.highWins === "number" && u.highWins !== (cur?.highWins ?? 0)) desired.highWins = u.highWins;
+        if (typeof u.lowWins === "number" && u.lowWins !== (cur?.lowWins ?? 0)) desired.lowWins = u.lowWins;
+        if (u.winner && u.winner !== (cur?.winner ?? null)) desired.winner = u.winner;
+        if (Object.keys(desired).length > 0) {
+          // fire-and-forget; updateSeriesState persists
+          updateSeriesStateRef.current(u.seriesId, desired);
+        }
+      }
+      setLiveStatus(newLive);
+      setLastFetch(new Date());
+      timer = setTimeout(tick, ESPN_POLL_INTERVAL);
+    };
+
+    tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded]);
 
   // Build the resolved bracket from initial + saved series state
   const series: Series[] = useMemo(() => {
@@ -137,14 +197,36 @@ export default function HomePage() {
     }
   };
 
+  // Keep refs in sync for the ESPN polling loop
+  useEffect(() => { seriesStateRef.current = seriesState; }, [seriesState]);
+  useEffect(() => { updateSeriesStateRef.current = updateSeriesState; });
+
   const flashToast = (msg: string) => {
     setToast(msg);
     window.setTimeout(() => setToast(null), 1800);
   };
 
-  const handleLogin = (player: string) => {
-    setCurrentPlayer(player);
-    if (player) localStorage.setItem("nba_player", player);
+  // Player login: password is the player's name (case-insensitive)
+  const handlePlayerLogin = (name: string, password: string): boolean => {
+    if (!PLAYERS.includes(name)) return false;
+    if (password.trim().toLowerCase() !== name.toLowerCase()) return false;
+    setCurrentPlayer(name);
+    localStorage.setItem("nba_player", name);
+    localStorage.setItem("nba_player_auth", "1");
+    return true;
+  };
+
+  const handlePlayerLogout = () => {
+    setCurrentPlayer("");
+    localStorage.removeItem("nba_player");
+    localStorage.removeItem("nba_player_auth");
+    flashToast("Signed out");
+  };
+
+  // Admin can pick on behalf of anyone (no password needed once admin)
+  const handleAdminPickAs = (name: string) => {
+    setCurrentPlayer(name);
+    if (name) localStorage.setItem("nba_player", name);
     else localStorage.removeItem("nba_player");
   };
 
@@ -213,14 +295,27 @@ export default function HomePage() {
 
       {/* Login bar */}
       <div className="login-bar">
-        <span className="login-status">
-          {currentPlayer ? <>Picking as <strong>{currentPlayer}</strong></> : "Choose your name to start picking"}
-        </span>
-        <select value={currentPlayer} onChange={(e) => handleLogin(e.target.value)}>
-          <option value="">— Select player —</option>
-          {PLAYERS.map((p) => <option key={p} value={p}>{p}</option>)}
-        </select>
-        <button className="btn btn-ghost btn-sm" onClick={() => setShowAdmin(true)}>
+        {currentPlayer ? (
+          <>
+            <span className="login-status">
+              Signed in as <strong>{currentPlayer}</strong>
+              {adminMode && currentPlayer !== "" && <em style={{ color: "var(--text-muted)", fontStyle: "normal", marginLeft: 6 }}>(admin override)</em>}
+            </span>
+            {adminMode ? (
+              <select value={currentPlayer} onChange={(e) => handleAdminPickAs(e.target.value)} title="Switch user (admin)">
+                {PLAYERS.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            ) : (
+              <button className="btn btn-ghost btn-sm" onClick={handlePlayerLogout}>Sign out</button>
+            )}
+          </>
+        ) : (
+          <>
+            <span className="login-status">Sign in to make picks</span>
+            <button className="btn btn-sm" onClick={() => setShowPlayerLogin(true)}>Sign in</button>
+          </>
+        )}
+        <button className="btn btn-ghost btn-sm" onClick={() => setShowAdmin(true)} style={{ marginLeft: "auto" }}>
           {adminMode ? "Admin ✓" : "Admin"}
         </button>
         {adminMode && <button className="btn btn-ghost btn-sm" onClick={handleAdminLogout}>Sign out admin</button>}
@@ -247,13 +342,13 @@ export default function HomePage() {
       )}
 
       {tab === "r1" && <RoundView round="r1" series={series} picks={picks} currentPlayer={currentPlayer}
-        seriesState={seriesState} adminMode={adminMode} onPick={setPick} onUpdateSeries={updateSeriesState} isLocked={isLocked} />}
+        seriesState={seriesState} liveStatus={liveStatus} adminMode={adminMode} onPick={setPick} onUpdateSeries={updateSeriesState} isLocked={isLocked} />}
       {tab === "r2" && <RoundView round="r2" series={series} picks={picks} currentPlayer={currentPlayer}
-        seriesState={seriesState} adminMode={adminMode} onPick={setPick} onUpdateSeries={updateSeriesState} isLocked={isLocked} />}
+        seriesState={seriesState} liveStatus={liveStatus} adminMode={adminMode} onPick={setPick} onUpdateSeries={updateSeriesState} isLocked={isLocked} />}
       {tab === "cf" && <RoundView round="cf" series={series} picks={picks} currentPlayer={currentPlayer}
-        seriesState={seriesState} adminMode={adminMode} onPick={setPick} onUpdateSeries={updateSeriesState} isLocked={isLocked} />}
+        seriesState={seriesState} liveStatus={liveStatus} adminMode={adminMode} onPick={setPick} onUpdateSeries={updateSeriesState} isLocked={isLocked} />}
       {tab === "finals" && <RoundView round="finals" series={series} picks={picks} currentPlayer={currentPlayer}
-        seriesState={seriesState} adminMode={adminMode} onPick={setPick} onUpdateSeries={updateSeriesState} isLocked={isLocked} />}
+        seriesState={seriesState} liveStatus={liveStatus} adminMode={adminMode} onPick={setPick} onUpdateSeries={updateSeriesState} isLocked={isLocked} />}
 
       {tab === "leaderboard" && <Leaderboard standings={rankedStandings} />}
       {tab === "all-picks" && <AllPicks series={series} picks={picks} isLocked={isLocked} adminMode={adminMode} />}
@@ -285,10 +380,74 @@ export default function HomePage() {
         </div>
       )}
 
+      {/* Player login modal */}
+      {showPlayerLogin && !currentPlayer && (
+        <div onClick={() => setShowPlayerLogin(false)} style={{
+          position: "fixed", inset: 0, background: "rgba(20,18,12,0.4)", display: "flex",
+          alignItems: "center", justifyContent: "center", zIndex: 50, padding: "1rem",
+        }}>
+          <div onClick={(e) => e.stopPropagation()} style={{
+            background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 14,
+            padding: "1.5rem", width: "100%", maxWidth: 380, boxShadow: "var(--shadow-lg)",
+          }}>
+            <h3 style={{ fontFamily: "Fraunces, serif", marginBottom: "0.4rem" }}>Sign in</h3>
+            <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", marginBottom: "1rem" }}>
+              Your password is your name (case doesn&apos;t matter).
+            </p>
+            <label style={{ display: "block", fontSize: "0.78rem", color: "var(--text-muted)", letterSpacing: "0.06em", marginBottom: "0.3rem", textTransform: "uppercase", fontFamily: "Bebas Neue, sans-serif" }}>
+              Name
+            </label>
+            <select
+              value={loginName}
+              onChange={(e) => setLoginName(e.target.value)}
+              style={{ width: "100%", padding: "0.6rem 0.85rem", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-card-alt)", marginBottom: "0.85rem" }}
+              autoFocus
+            >
+              <option value="">— Select your name —</option>
+              {PLAYERS.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <label style={{ display: "block", fontSize: "0.78rem", color: "var(--text-muted)", letterSpacing: "0.06em", marginBottom: "0.3rem", textTransform: "uppercase", fontFamily: "Bebas Neue, sans-serif" }}>
+              Password
+            </label>
+            <input
+              type="password" placeholder="Type your name" value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  if (handlePlayerLogin(loginName, loginPassword)) {
+                    setShowPlayerLogin(false);
+                    setLoginPassword("");
+                    setLoginName("");
+                    flashToast(`Welcome, ${loginName}`);
+                  } else {
+                    flashToast("Wrong password");
+                  }
+                }
+              }}
+              style={{ width: "100%", padding: "0.6rem 0.85rem", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-card-alt)" }}
+            />
+            <div style={{ display: "flex", gap: "0.5rem", marginTop: "1rem", justifyContent: "flex-end" }}>
+              <button className="btn btn-ghost btn-sm" onClick={() => { setShowPlayerLogin(false); setLoginPassword(""); }}>Cancel</button>
+              <button className="btn btn-sm" onClick={() => {
+                if (handlePlayerLogin(loginName, loginPassword)) {
+                  setShowPlayerLogin(false);
+                  setLoginPassword("");
+                  setLoginName("");
+                  flashToast(`Welcome, ${loginName}`);
+                } else {
+                  flashToast("Wrong password");
+                }
+              }}>Sign in</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {toast && <div className="toast">{toast}</div>}
 
       <footer className="footer">
         ST. G&apos;S NBA PICK&apos;EM • 2026 PLAYOFFS{!hasSupabase && " • LOCAL MODE (NO SUPABASE)"}
+        {lastFetch && <> • LIVE SYNCED {lastFetch.toLocaleTimeString()}</>}
       </footer>
     </div>
   );
@@ -297,13 +456,14 @@ export default function HomePage() {
 /* ---------------- ROUND VIEW ---------------- */
 
 function RoundView({
-  round, series, picks, currentPlayer, seriesState, adminMode, onPick, onUpdateSeries, isLocked,
+  round, series, picks, currentPlayer, seriesState, liveStatus, adminMode, onPick, onUpdateSeries, isLocked,
 }: {
   round: RoundKey;
   series: Series[];
   picks: AllPicks;
   currentPlayer: string;
   seriesState: Record<string, SeriesState>;
+  liveStatus: Record<string, string>;
   adminMode: boolean;
   onPick: (seriesId: string, teamKey: string) => void;
   onUpdateSeries: (id: string, updates: Partial<SeriesState>) => void;
@@ -327,6 +487,7 @@ function RoundView({
             s={s}
             pick={currentPlayer ? picks[currentPlayer]?.[s.id] : undefined}
             state={seriesState[s.id]}
+            liveStatus={liveStatus[s.id]}
             adminMode={adminMode}
             locked={isLocked(s.id)}
             onPick={onPick}
@@ -341,11 +502,12 @@ function RoundView({
 /* ---------------- SERIES CARD ---------------- */
 
 function SeriesCard({
-  s, pick, state, adminMode, locked, onPick, onUpdate,
+  s, pick, state, liveStatus, adminMode, locked, onPick, onUpdate,
 }: {
   s: Series;
   pick?: string;
   state?: SeriesState;
+  liveStatus?: string;
   adminMode: boolean;
   locked: boolean;
   onPick: (seriesId: string, teamKey: string) => void;
@@ -424,9 +586,9 @@ function SeriesCard({
         <TeamRow team={low} isHigh={false} />
       </div>
 
-      {(state?.highWins || state?.lowWins) ? (
+      {(state?.highWins || state?.lowWins || liveStatus) ? (
         <div className="series-status">
-          <span>Series</span>
+          <span>{liveStatus || "Series"}</span>
           <span className="series-score">{high.abbr} {state?.highWins ?? 0} — {state?.lowWins ?? 0} {low.abbr}</span>
         </div>
       ) : null}
@@ -562,6 +724,9 @@ function Rules() {
         <h3>How it works</h3>
         <p>Pick the winner of every playoff series. You earn points only for correct picks. Picking lower seeds (underdogs) is worth more.</p>
 
+        <h3>Signing in</h3>
+        <p>Each player signs in with their name as both username and password (case doesn&apos;t matter). This keeps the wrong person from accidentally picking your games.</p>
+
         <h3>Scoring</h3>
         <table className="scoring-table">
           <thead>
@@ -592,7 +757,7 @@ function Rules() {
         </table>
 
         <h3>Locking</h3>
-        <p>Each series locks once Game 1 tips off. After that, your pick for that series is set in stone. Admin can override if needed.</p>
+        <p>Each series locks once Game 1 tips off. The app pulls live data from ESPN every minute and locks automatically when it sees Game 1 has started. Admin can override the lock if needed.</p>
 
         <h3>Visibility</h3>
         <p>Picks are hidden from other players until the series locks. You&apos;ll see a checkmark to confirm someone picked, but not what they picked.</p>
