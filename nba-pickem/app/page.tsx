@@ -26,7 +26,7 @@ const defaultSeriesState: SeriesState = {
 };
 
 export default function HomePage() {
-  const [tab, setTab] = useState<"r1" | "r2" | "cf" | "finals" | "leaderboard" | "rules" | "all-picks">("r1");
+  const [tab, setTab] = useState<"r1" | "r2" | "cf" | "finals" | "leaderboard" | "rules" | "all-picks" | "bulk">("r1");
   const [currentPlayer, setCurrentPlayer] = useState<string>("");
   const [picks, setPicks] = useState<AllPicks>({});
   const [seriesState, setSeriesState] = useState<Record<string, SeriesState>>({});
@@ -173,6 +173,31 @@ export default function HomePage() {
         .upsert({ player: currentPlayer, series_id: seriesId, team_key: teamKey }, { onConflict: "player,series_id" });
       if (error) flashToast("Save failed - check Supabase");
     }
+  };
+
+  // Bulk save: write many picks for many players at once. Admin-only path.
+  const bulkSavePicks = async (entries: { player: string; seriesId: string; teamKey: string }[]) => {
+    if (entries.length === 0) {
+      flashToast("Nothing to save");
+      return;
+    }
+    // Update local state first
+    setPicks((prev) => {
+      const next: AllPicks = { ...prev };
+      for (const e of entries) {
+        next[e.player] = { ...(next[e.player] || {}), [e.seriesId]: e.teamKey };
+      }
+      return next;
+    });
+    if (hasSupabase && supabase) {
+      const rows = entries.map((e) => ({ player: e.player, series_id: e.seriesId, team_key: e.teamKey }));
+      const { error } = await supabase.from("nba_picks").upsert(rows, { onConflict: "player,series_id" });
+      if (error) {
+        flashToast("Save failed - check Supabase");
+        return;
+      }
+    }
+    flashToast(`Saved ${entries.length} pick${entries.length === 1 ? "" : "s"}`);
   };
 
   const updateSeriesState = async (seriesId: string, updates: Partial<SeriesState>) => {
@@ -329,6 +354,7 @@ export default function HomePage() {
         <button className={`tab ${tab === "cf" ? "active" : ""}`} onClick={() => setTab("cf")}>Conf Finals</button>
         <button className={`tab ${tab === "finals" ? "active" : ""}`} onClick={() => setTab("finals")}>NBA Finals</button>
         <button className={`tab ${tab === "all-picks" ? "active" : ""}`} onClick={() => setTab("all-picks")}>All Picks</button>
+        {adminMode && <button className={`tab ${tab === "bulk" ? "active" : ""}`} onClick={() => setTab("bulk")} style={{ color: tab === "bulk" ? undefined : "var(--accent)" }}>Enter All Picks</button>}
         <button className={`tab ${tab === "rules" ? "active" : ""}`} onClick={() => setTab("rules")}>Rules</button>
       </div>
 
@@ -352,6 +378,7 @@ export default function HomePage() {
 
       {tab === "leaderboard" && <Leaderboard standings={rankedStandings} />}
       {tab === "all-picks" && <AllPicks series={series} picks={picks} isLocked={isLocked} adminMode={adminMode} />}
+      {tab === "bulk" && adminMode && <BulkEntry series={series} picks={picks} onBulkSave={bulkSavePicks} />}
       {tab === "rules" && <Rules />}
 
       {/* Admin login modal */}
@@ -709,6 +736,212 @@ function AllPicks({
             })}
           </tbody>
         </table>
+      </div>
+    </>
+  );
+}
+
+/* ---------------- BULK ENTRY (admin) ---------------- */
+
+function BulkEntry({
+  series, picks, onBulkSave,
+}: {
+  series: Series[];
+  picks: AllPicks;
+  onBulkSave: (entries: { player: string; seriesId: string; teamKey: string }[]) => Promise<void>;
+}) {
+  // Local draft state - only commits on Save
+  const [draft, setDraft] = useState<AllPicks>(() => {
+    // Seed from saved picks
+    const out: AllPicks = {};
+    for (const p of PLAYERS) out[p] = { ...(picks[p] || {}) };
+    return out;
+  });
+  const [filterRound, setFilterRound] = useState<RoundKey | "all">("r1");
+  const [saving, setSaving] = useState(false);
+
+  // Visible series for the current round filter
+  const visibleSeries = useMemo(
+    () => series.filter((s) => (filterRound === "all" ? true : s.round === filterRound)).filter((s) => s.highSeed && s.lowSeed),
+    [series, filterRound]
+  );
+
+  // Count unsaved changes vs `picks`
+  const unsavedCount = useMemo(() => {
+    let n = 0;
+    for (const p of PLAYERS) {
+      for (const sid of Object.keys(draft[p] || {})) {
+        if (draft[p][sid] !== picks[p]?.[sid]) n++;
+      }
+    }
+    return n;
+  }, [draft, picks]);
+
+  const setCell = (player: string, sid: string, teamKey: string) => {
+    setDraft((prev) => ({
+      ...prev,
+      [player]: { ...(prev[player] || {}), [sid]: teamKey },
+    }));
+  };
+
+  const fillRow = (player: string, side: "high" | "low") => {
+    setDraft((prev) => {
+      const next = { ...prev, [player]: { ...(prev[player] || {}) } };
+      for (const s of visibleSeries) {
+        const team = side === "high" ? s.highSeed : s.lowSeed;
+        if (team) next[player][s.id] = team;
+      }
+      return next;
+    });
+  };
+
+  const clearRow = (player: string) => {
+    setDraft((prev) => {
+      const next = { ...prev };
+      const cur = { ...(next[player] || {}) };
+      for (const s of visibleSeries) delete cur[s.id];
+      next[player] = cur;
+      return next;
+    });
+  };
+
+  const handleSave = async () => {
+    const entries: { player: string; seriesId: string; teamKey: string }[] = [];
+    for (const p of PLAYERS) {
+      const cur = draft[p] || {};
+      const saved = picks[p] || {};
+      for (const sid of Object.keys(cur)) {
+        if (cur[sid] && cur[sid] !== saved[sid]) {
+          entries.push({ player: p, seriesId: sid, teamKey: cur[sid] });
+        }
+      }
+    }
+    if (entries.length === 0) return;
+    setSaving(true);
+    await onBulkSave(entries);
+    setSaving(false);
+  };
+
+  const handleReset = () => {
+    const out: AllPicks = {};
+    for (const p of PLAYERS) out[p] = { ...(picks[p] || {}) };
+    setDraft(out);
+  };
+
+  return (
+    <>
+      <div className="section-title">
+        <span>Enter All Picks</span>
+        <span className="meta">{unsavedCount} unsaved change{unsavedCount === 1 ? "" : "s"}</span>
+      </div>
+
+      <div className="admin-bar" style={{ marginBottom: "1rem" }}>
+        <span className="label">Filter</span>
+        {(["r1", "r2", "cf", "finals", "all"] as const).map((r) => (
+          <button
+            key={r}
+            className={`btn btn-ghost btn-sm ${filterRound === r ? "" : ""}`}
+            onClick={() => setFilterRound(r)}
+            style={filterRound === r ? { background: "var(--text)", color: "var(--bg-card)", borderColor: "var(--text)" } : {}}
+          >
+            {r === "all" ? "All rounds" : ROUND_INFO[r as RoundKey].short}
+          </button>
+        ))}
+        <span style={{ marginLeft: "auto", display: "flex", gap: "0.4rem" }}>
+          <button className="btn btn-ghost btn-sm" onClick={handleReset} disabled={unsavedCount === 0}>
+            Reset
+          </button>
+          <button className="btn btn-sm" onClick={handleSave} disabled={unsavedCount === 0 || saving}>
+            {saving ? "Saving…" : `Save ${unsavedCount || ""}`}
+          </button>
+        </span>
+      </div>
+
+      <div className="picks-table-wrap">
+        <table className="picks-table">
+          <thead>
+            <tr>
+              <th style={{ position: "sticky", left: 0, zIndex: 2 }}>PLAYER</th>
+              {visibleSeries.map((s) => {
+                const high = s.highSeed ? TEAMS[s.highSeed] : null;
+                const low = s.lowSeed ? TEAMS[s.lowSeed] : null;
+                const winner = s.winner;
+                return (
+                  <th key={s.id} style={{ minWidth: 130 }}>
+                    <div style={{ fontFamily: "DM Sans, sans-serif", fontWeight: 600, fontSize: "0.8rem", color: "var(--text)", letterSpacing: "normal", textTransform: "none" }}>
+                      {high?.abbr} ({high?.seed}) v {low?.abbr} ({low?.seed})
+                    </div>
+                    <div style={{ fontSize: "0.7rem", marginTop: 2, color: winner ? "var(--green)" : "var(--text-muted)" }}>
+                      {ROUND_INFO[s.round].short}
+                      {winner && <> • {TEAMS[winner]?.abbr} won</>}
+                    </div>
+                  </th>
+                );
+              })}
+              <th>TOOLS</th>
+            </tr>
+          </thead>
+          <tbody>
+            {PLAYERS.map((p) => (
+              <tr key={p}>
+                <td style={{ fontWeight: 600, position: "sticky", left: 0, background: "var(--bg-card)", borderRight: "1px solid var(--border)" }}>
+                  {p}
+                </td>
+                {visibleSeries.map((s) => {
+                  const high = s.highSeed ? TEAMS[s.highSeed] : null;
+                  const low = s.lowSeed ? TEAMS[s.lowSeed] : null;
+                  const cur = draft[p]?.[s.id] || "";
+                  const dirty = cur !== (picks[p]?.[s.id] || "");
+                  if (!high || !low) return <td key={s.id} className="pick-cell empty">—</td>;
+                  return (
+                    <td key={s.id}>
+                      <select
+                        value={cur}
+                        onChange={(e) => setCell(p, s.id, e.target.value)}
+                        style={{
+                          width: "100%",
+                          padding: "0.35rem 0.4rem",
+                          borderRadius: 6,
+                          border: dirty ? "1.5px solid var(--accent)" : "1px solid var(--border)",
+                          background: dirty ? "var(--accent-soft)" : "var(--bg-card-alt)",
+                          fontSize: "0.82rem",
+                        }}
+                      >
+                        <option value="">—</option>
+                        <option value={high.key}>{high.abbr} ({high.seed})</option>
+                        <option value={low.key}>{low.abbr} ({low.seed})</option>
+                      </select>
+                    </td>
+                  );
+                })}
+                <td>
+                  <div style={{ display: "flex", gap: "0.25rem" }}>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => fillRow(p, "high")}
+                      title="Fill all visible series with the higher seed"
+                      style={{ padding: "0.25rem 0.5rem", fontSize: "0.72rem" }}
+                    >
+                      All chalk
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => clearRow(p)}
+                      title="Clear all visible picks for this player"
+                      style={{ padding: "0.25rem 0.5rem", fontSize: "0.72rem" }}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ marginTop: "1rem", padding: "0.85rem 1.1rem", background: "var(--bg-card-alt)", borderRadius: 10, fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+        <strong>How this works:</strong> changes in this view are <em>local until you click Save</em>. Pink cells are unsaved edits. Picking is allowed even on locked series (admin override). Hit <strong>Save</strong> at the top to write everything to Supabase in one go.
       </div>
     </>
   );
