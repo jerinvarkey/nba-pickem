@@ -1,0 +1,572 @@
+:root {
+  --bg: #f4f1ea;
+  --bg-card: #ffffff;
+  --bg-card-alt: #faf6ee;
+  --bg-subtle: #ece7dc;
+  --border: #e2dccd;
+  --border-strong: #c8bfa9;
+  --text: #1a1a1a;
+  --text-secondary: #555048;
+  --text-muted: #8a847a;
+  --accent: #c8102e;
+  --accent-hover: #a30d24;
+  --accent-soft: #fbe6ea;
+  --gold: #d4a017;
+  --green: #2e7d4f;
+  --green-soft: #e6f2ec;
+  --shadow-sm: 0 1px 2px rgba(20, 18, 12, 0.04);
+  --shadow: 0 4px 14px rgba(20, 18, 12, 0.06);
+  --shadow-lg: 0 12px 32px rgba(20, 18, 12, 0.10);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "DM Sans", -apple-system, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+body {
+  background-image:
+    radial-gradient(circle at 8% 12%, rgba(200, 16, 46, 0.05) 0%, transparent 38%),
+    radial-gradient(circle at 92% 88%, rgba(212, 160, 23, 0.06) 0%, transparent 38%);
+}
+
+button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+input, select { font-family: inherit; font-size: inherit; }
+a { color: inherit; text-decoration: none; }
+
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 4rem;
+}
+
+@media (min-width: 768px) {
+  .container { padding: 2.5rem 2rem 5rem; }
+}
+
+/* Header */
+.header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  margin-bottom: 1.75rem;
+  position: relative;
+}
+
+.header-mark {
+  font-family: "Bebas Neue", sans-serif;
+  font-size: 0.85rem;
+  letter-spacing: 0.3em;
+  color: var(--accent);
+  margin-bottom: 0.4rem;
+}
+
+.header h1 {
+  font-family: "Fraunces", serif;
+  font-weight: 900;
+  font-size: clamp(2rem, 6vw, 3.25rem);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.4rem;
+}
+
+.header h1 em {
+  font-style: italic;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.header-sub {
+  font-family: "DM Sans", sans-serif;
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+}
+
+/* Login bar */
+.login-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.5rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.login-bar select, .login-bar input {
+  background: var(--bg-card-alt);
+  border: 1px solid var(--border);
+  padding: 0.55rem 0.85rem;
+  border-radius: 8px;
+  color: var(--text);
+}
+
+.login-bar select:focus, .login-bar input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.login-status {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.login-status strong { color: var(--text); }
+
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.35rem;
+  margin-bottom: 1.5rem;
+  overflow-x: auto;
+  box-shadow: var(--shadow-sm);
+}
+
+.tab {
+  font-family: "Bebas Neue", sans-serif;
+  font-size: 0.95rem;
+  letter-spacing: 0.08em;
+  padding: 0.65rem 1rem;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.tab:hover { color: var(--text); background: var(--bg-card-alt); }
+
+.tab.active {
+  background: var(--text);
+  color: var(--bg-card);
+}
+
+/* Section title */
+.section-title {
+  font-family: "Fraunces", serif;
+  font-weight: 700;
+  font-size: 1.5rem;
+  letter-spacing: -0.01em;
+  margin-bottom: 1rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.section-title .meta {
+  font-family: "DM Sans", sans-serif;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: normal;
+}
+
+/* Series cards */
+.series-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.85rem;
+}
+
+@media (min-width: 720px) {
+  .series-grid { grid-template-columns: 1fr 1fr; }
+}
+
+.series-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1rem 1.1rem;
+  box-shadow: var(--shadow-sm);
+  position: relative;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.series-card.locked { background: var(--bg-card-alt); }
+.series-card:hover { box-shadow: var(--shadow); }
+
+.series-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 0.7rem;
+}
+
+.lock-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.open-pill {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+/* Matchup */
+.matchup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.team-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 0.85rem;
+  border-radius: 10px;
+  background: var(--bg-card-alt);
+  border: 1.5px solid transparent;
+  transition: all 0.12s ease;
+  cursor: pointer;
+}
+
+.team-row:hover:not(.disabled) {
+  border-color: var(--border-strong);
+}
+
+.team-row.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.team-row.winner {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+
+.team-row.disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.team-info {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.seed {
+  font-family: "Bebas Neue", sans-serif;
+  font-size: 1rem;
+  background: var(--text);
+  color: var(--bg-card);
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.team-row.selected .seed { background: var(--accent); }
+.team-row.winner .seed { background: var(--green); }
+
+.team-name {
+  font-weight: 600;
+  font-size: 0.97rem;
+}
+
+.team-record {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.points-tag {
+  font-family: "Bebas Neue", sans-serif;
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.team-row.selected .points-tag,
+.team-row.winner .points-tag { color: var(--text); }
+
+.series-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.7rem;
+  padding-top: 0.65rem;
+  border-top: 1px dashed var(--border);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.series-score { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* Leaderboard */
+.leaderboard {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+
+.lb-row {
+  display: grid;
+  grid-template-columns: 50px 1fr auto auto;
+  gap: 0.75rem;
+  padding: 0.85rem 1.15rem;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+
+.lb-row:last-child { border-bottom: none; }
+
+.lb-row.header {
+  background: var(--bg-card-alt);
+  font-family: "Bebas Neue", sans-serif;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.lb-rank {
+  font-family: "Fraunces", serif;
+  font-weight: 700;
+  font-size: 1.2rem;
+  color: var(--text);
+}
+
+.lb-rank.gold { color: var(--gold); }
+.lb-rank.silver { color: #8a8a8a; }
+.lb-rank.bronze { color: #a0744a; }
+
+.lb-name { font-weight: 600; font-size: 0.97rem; }
+
+.lb-points {
+  font-family: "Bebas Neue", sans-serif;
+  font-size: 1.4rem;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.lb-picks {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Picks grid (admin/all-picks view) */
+.picks-table-wrap {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: auto;
+  box-shadow: var(--shadow-sm);
+}
+
+.picks-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.picks-table th, .picks-table td {
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.picks-table th {
+  background: var(--bg-card-alt);
+  font-family: "Bebas Neue", sans-serif;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  position: sticky;
+  top: 0;
+}
+
+.picks-table .pick-cell {
+  font-weight: 500;
+}
+
+.picks-table .pick-cell.correct { color: var(--green); font-weight: 600; }
+.picks-table .pick-cell.wrong { color: var(--accent); text-decoration: line-through; opacity: 0.7; }
+.picks-table .pick-cell.empty { color: var(--text-muted); font-style: italic; }
+.picks-table .pick-cell.hidden-pick { color: var(--text-muted); }
+
+/* Buttons */
+.btn {
+  background: var(--text);
+  color: var(--bg-card);
+  padding: 0.6rem 1.1rem;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  letter-spacing: 0.02em;
+  transition: opacity 0.15s ease;
+}
+
+.btn:hover { opacity: 0.85; }
+
+.btn-accent { background: var(--accent); }
+.btn-ghost {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+}
+.btn-ghost:hover { background: var(--bg-card-alt); opacity: 1; }
+
+.btn-sm { padding: 0.4rem 0.75rem; font-size: 0.82rem; }
+
+/* Rules */
+.rules-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.5rem 1.6rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.rules-card h3 {
+  font-family: "Fraunces", serif;
+  font-weight: 700;
+  font-size: 1.2rem;
+  margin: 1.25rem 0 0.6rem;
+}
+
+.rules-card h3:first-child { margin-top: 0; }
+
+.rules-card p { color: var(--text-secondary); margin-bottom: 0.7rem; }
+
+.scoring-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5rem 0 1rem;
+}
+
+.scoring-table th, .scoring-table td {
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.scoring-table th {
+  font-family: "Bebas Neue", sans-serif;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  background: var(--bg-card-alt);
+}
+
+.scoring-table td.formula {
+  font-family: "Bebas Neue", sans-serif;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  font-size: 1.05rem;
+}
+
+/* Admin */
+.admin-bar {
+  background: var(--bg-card-alt);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.85rem 1.1rem;
+  margin-bottom: 1.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.admin-bar .label {
+  font-family: "Bebas Neue", sans-serif;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--text);
+  color: var(--bg-card);
+  padding: 0.7rem 1.2rem;
+  border-radius: 999px;
+  font-size: 0.88rem;
+  z-index: 100;
+  box-shadow: var(--shadow-lg);
+  animation: toast-in 0.2s ease;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* Footer */
+.footer {
+  text-align: center;
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+}
+
+/* Empty state */
+.empty {
+  background: var(--bg-card);
+  border: 1px dashed var(--border-strong);
+  border-radius: 14px;
+  padding: 2.25rem 1.5rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.empty h4 {
+  font-family: "Fraunces", serif;
+  color: var(--text);
+  margin-bottom: 0.4rem;
+  font-size: 1.1rem;
+}
+
+/* Conf flag */
+.conf-flag {
+  font-family: "Bebas Neue", sans-serif;
+  font-size: 0.75rem;
+  letter-spacing: 0.15em;
+  padding: 0.1rem 0.5rem;
+  border-radius: 4px;
+}
+
+.conf-flag.east { background: #e8f0fb; color: #1d4ed8; }
+.conf-flag.west { background: #fdecea; color: #b91c1c; }
