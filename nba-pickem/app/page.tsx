@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef, Fragment } from "react";
 import {
   TEAMS, ROUND_INFO, PLAYERS, INITIAL_SERIES, resolveBracket, computePoints,
   type Series, type RoundKey, type Team,
@@ -113,6 +113,8 @@ export default function HomePage() {
         if (u.statusDetail) newLive[u.seriesId] = u.statusDetail;
         const cur = seriesStateRef.current[u.seriesId];
         const desired: Partial<SeriesState> = {};
+        // Once a winner is locked in (by admin or ESPN), don't touch the series anymore
+        if (cur?.winner) continue;
         if (u.game1Started && !cur?.game1Started) desired.game1Started = true;
         if (typeof u.highWins === "number" && u.highWins !== (cur?.highWins ?? 0)) desired.highWins = u.highWins;
         if (typeof u.lowWins === "number" && u.lowWins !== (cur?.lowWins ?? 0)) desired.lowWins = u.lowWins;
@@ -279,16 +281,19 @@ export default function HomePage() {
       let total = 0;
       let correct = 0;
       let made = 0;
+      const byRound: Record<RoundKey, number> = { r1: 0, r2: 0, cf: 0, finals: 0 };
       Object.entries(picks[p] || {}).forEach(([sid, teamKey]) => {
         made++;
         const s = series.find((x) => x.id === sid);
         if (!s || !s.winner) return;
         if (s.winner === teamKey) {
-          total += computePoints(s.round, teamKey);
+          const pts = computePoints(s.round, teamKey);
+          total += pts;
+          byRound[s.round] += pts;
           correct++;
         }
       });
-      return { player: p, total, correct, made };
+      return { player: p, total, correct, made, byRound };
     }).sort((a, b) => b.total - a.total || b.correct - a.correct);
   }, [picks, series]);
 
@@ -654,31 +659,57 @@ function SeriesCard({
 
 /* ---------------- LEADERBOARD ---------------- */
 
-function Leaderboard({ standings }: { standings: { player: string; total: number; correct: number; made: number; rank: number }[] }) {
+function Leaderboard({ standings }: { standings: { player: string; total: number; correct: number; made: number; rank: number; byRound: Record<RoundKey, number> }[] }) {
   return (
     <>
       <div className="section-title">
         <span>Leaderboard</span>
         <span className="meta">Ties share a rank</span>
       </div>
-      <div className="leaderboard">
-        <div className="lb-row header">
-          <span>RANK</span>
-          <span>PLAYER</span>
-          <span>PICKS</span>
-          <span>POINTS</span>
-        </div>
-        {standings.map((s) => {
-          const rankCls = s.rank === 1 ? "gold" : s.rank === 2 ? "silver" : s.rank === 3 ? "bronze" : "";
-          return (
-            <div className="lb-row" key={s.player}>
-              <span className={`lb-rank ${rankCls}`}>{s.rank}</span>
-              <span className="lb-name">{s.player}</span>
-              <span className="lb-picks">{s.correct}/{s.made}</span>
-              <span className="lb-points">{s.total}</span>
-            </div>
-          );
-        })}
+      <div className="picks-table-wrap">
+        <table className="picks-table">
+          <thead>
+            <tr>
+              <th>RANK</th>
+              <th>PLAYER</th>
+              <th style={{ textAlign: "center" }}>R1</th>
+              <th style={{ textAlign: "center" }}>R2</th>
+              <th style={{ textAlign: "center" }}>CF</th>
+              <th style={{ textAlign: "center" }}>F</th>
+              <th style={{ textAlign: "center" }}>CORRECT</th>
+              <th style={{ textAlign: "center" }}>POINTS</th>
+            </tr>
+          </thead>
+          <tbody>
+            {standings.map((s) => {
+              const rankCls = s.rank === 1 ? "gold" : s.rank === 2 ? "silver" : s.rank === 3 ? "bronze" : "";
+              return (
+                <tr key={s.player}>
+                  <td>
+                    <span className={`lb-rank ${rankCls}`} style={{ fontFamily: "Fraunces, serif", fontWeight: 700, fontSize: "1.15rem" }}>
+                      {s.rank}
+                    </span>
+                  </td>
+                  <td style={{ fontWeight: 600 }}>{s.player}</td>
+                  <td style={{ textAlign: "center", fontVariantNumeric: "tabular-nums", color: s.byRound.r1 > 0 ? "var(--text)" : "var(--text-muted)" }}>{s.byRound.r1}</td>
+                  <td style={{ textAlign: "center", fontVariantNumeric: "tabular-nums", color: s.byRound.r2 > 0 ? "var(--text)" : "var(--text-muted)" }}>{s.byRound.r2}</td>
+                  <td style={{ textAlign: "center", fontVariantNumeric: "tabular-nums", color: s.byRound.cf > 0 ? "var(--text)" : "var(--text-muted)" }}>{s.byRound.cf}</td>
+                  <td style={{ textAlign: "center", fontVariantNumeric: "tabular-nums", color: s.byRound.finals > 0 ? "var(--text)" : "var(--text-muted)" }}>{s.byRound.finals}</td>
+                  <td style={{ textAlign: "center", color: "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>{s.correct}/{s.made}</td>
+                  <td style={{
+                    textAlign: "center",
+                    fontFamily: "Bebas Neue, sans-serif",
+                    fontSize: "1.4rem",
+                    color: "var(--accent)",
+                    letterSpacing: "0.04em",
+                  }}>
+                    {s.total}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </>
   );
@@ -694,46 +725,196 @@ function AllPicks({
   isLocked: (id: string) => boolean;
   adminMode: boolean;
 }) {
+  // Group series by round
+  const groupedSeries = useMemo(() => {
+    const groups: Record<RoundKey, Series[]> = { r1: [], r2: [], cf: [], finals: [] };
+    for (const s of series) groups[s.round].push(s);
+    return groups;
+  }, [series]);
+
+  // Per-player totals (overall and per round)
+  const totals = useMemo(() => {
+    const overall: Record<string, number> = {};
+    const byRound: Record<RoundKey, Record<string, number>> = { r1: {}, r2: {}, cf: {}, finals: {} };
+    const correctOverall: Record<string, number> = {};
+    const correctByRound: Record<RoundKey, Record<string, number>> = { r1: {}, r2: {}, cf: {}, finals: {} };
+    for (const p of PLAYERS) {
+      overall[p] = 0;
+      correctOverall[p] = 0;
+      for (const r of Object.keys(byRound) as RoundKey[]) {
+        byRound[r][p] = 0;
+        correctByRound[r][p] = 0;
+      }
+    }
+    for (const s of series) {
+      if (!s.winner) continue;
+      for (const p of PLAYERS) {
+        const pk = picks[p]?.[s.id];
+        if (pk && pk === s.winner) {
+          const pts = computePoints(s.round, pk);
+          overall[p] += pts;
+          byRound[s.round][p] += pts;
+          correctOverall[p] += 1;
+          correctByRound[s.round][p] += 1;
+        }
+      }
+    }
+    return { overall, byRound, correctOverall, correctByRound };
+  }, [series, picks]);
+
+  const roundOrder: RoundKey[] = ["r1", "r2", "cf", "finals"];
+
   return (
     <>
       <div className="section-title">
         <span>All Picks</span>
         <span className="meta">Hidden until series locks (admin sees all)</span>
       </div>
+
       <div className="picks-table-wrap">
         <table className="picks-table">
           <thead>
             <tr>
-              <th>SERIES</th>
-              {PLAYERS.map((p) => <th key={p}>{p}</th>)}
+              <th style={{ position: "sticky", left: 0, zIndex: 3, background: "var(--bg-card-alt)" }}>SERIES</th>
+              {PLAYERS.map((p) => <th key={p} style={{ textAlign: "center" }}>{p}</th>)}
             </tr>
           </thead>
           <tbody>
-            {series.map((s) => {
-              const high = s.highSeed ? TEAMS[s.highSeed] : null;
-              const low = s.lowSeed ? TEAMS[s.lowSeed] : null;
-              const label = high && low
-                ? `${ROUND_INFO[s.round].short} ${high.abbr} v ${low.abbr}`
-                : `${ROUND_INFO[s.round].short} TBD`;
-              const locked = isLocked(s.id);
-              const winner = s.winner;
+            {roundOrder.map((roundKey) => {
+              const roundSeries = groupedSeries[roundKey];
+              if (roundSeries.length === 0) return null;
+              const info = ROUND_INFO[roundKey];
+
               return (
-                <tr key={s.id}>
-                  <td style={{ fontWeight: 600 }}>{label}</td>
-                  {PLAYERS.map((p) => {
-                    const pk = picks[p]?.[s.id];
-                    if (!pk) return <td key={p} className="pick-cell empty">—</td>;
-                    if (!locked && !adminMode) {
-                      return <td key={p} className="pick-cell hidden-pick">✓</td>;
-                    }
-                    const team = TEAMS[pk];
-                    let cls = "pick-cell";
-                    if (winner) cls += pk === winner ? " correct" : " wrong";
-                    return <td key={p} className={cls}>{team?.abbr ?? pk}</td>;
+                <Fragment key={roundKey}>
+                  {/* Round header row */}
+                  <tr>
+                    <td colSpan={PLAYERS.length + 1} style={{
+                      background: "var(--bg-subtle)",
+                      fontFamily: "Bebas Neue, sans-serif",
+                      letterSpacing: "0.1em",
+                      fontSize: "0.88rem",
+                      color: "var(--text)",
+                      padding: "0.65rem 0.85rem",
+                    }}>
+                      {info.label} <span style={{ color: "var(--text-muted)", marginLeft: 8 }}>{info.basePoints} + seed</span>
+                    </td>
+                  </tr>
+
+                  {/* Series rows */}
+                  {roundSeries.map((s) => {
+                    const high = s.highSeed ? TEAMS[s.highSeed] : null;
+                    const low = s.lowSeed ? TEAMS[s.lowSeed] : null;
+                    const label = high && low
+                      ? `${high.abbr} v ${low.abbr}`
+                      : "TBD";
+                    const locked = isLocked(s.id);
+                    const winner = s.winner;
+                    const winnerTeam = winner ? TEAMS[winner] : null;
+                    const winnerPts = winner ? computePoints(s.round, winner) : 0;
+
+                    return (
+                      <tr key={s.id}>
+                        <td style={{ position: "sticky", left: 0, background: "var(--bg-card)", borderRight: "1px solid var(--border)", zIndex: 1 }}>
+                          <div style={{ fontWeight: 600 }}>{label}</div>
+                          {winnerTeam && (
+                            <div style={{ fontSize: "0.72rem", color: "var(--green)", marginTop: 1 }}>
+                              {winnerTeam.abbr} won • +{winnerPts}
+                            </div>
+                          )}
+                          {!winnerTeam && locked && (
+                            <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: 1 }}>locked</div>
+                          )}
+                        </td>
+                        {PLAYERS.map((p) => {
+                          const pk = picks[p]?.[s.id];
+                          if (!pk) return <td key={p} className="pick-cell empty" style={{ textAlign: "center" }}>—</td>;
+                          if (!locked && !adminMode) {
+                            return <td key={p} className="pick-cell hidden-pick" style={{ textAlign: "center" }}>✓</td>;
+                          }
+                          const team = TEAMS[pk];
+                          const isCorrect = winner && pk === winner;
+                          const isWrong = winner && pk !== winner;
+                          let cls = "pick-cell";
+                          if (isCorrect) cls += " correct";
+                          else if (isWrong) cls += " wrong";
+                          return (
+                            <td key={p} className={cls} style={{ textAlign: "center" }}>
+                              <div>{team?.abbr ?? pk}</div>
+                              {isCorrect && (
+                                <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--green)" }}>
+                                  +{computePoints(s.round, pk)}
+                                </div>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
                   })}
-                </tr>
+
+                  {/* Round subtotal row */}
+                  <tr>
+                    <td style={{
+                      position: "sticky", left: 0, zIndex: 1,
+                      background: "var(--bg-card-alt)",
+                      borderRight: "1px solid var(--border)",
+                      fontFamily: "Bebas Neue, sans-serif",
+                      letterSpacing: "0.08em",
+                      fontSize: "0.8rem",
+                      color: "var(--text-muted)",
+                    }}>
+                      {info.short} TOTAL
+                    </td>
+                    {PLAYERS.map((p) => {
+                      const pts = totals.byRound[roundKey][p];
+                      const correct = totals.correctByRound[roundKey][p];
+                      return (
+                        <td key={p} style={{
+                          background: "var(--bg-card-alt)",
+                          textAlign: "center",
+                          fontFamily: "Bebas Neue, sans-serif",
+                          fontSize: "1rem",
+                          color: pts > 0 ? "var(--accent)" : "var(--text-muted)",
+                        }}>
+                          {pts}
+                          <div style={{ fontFamily: "DM Sans", fontSize: "0.65rem", fontWeight: 500, color: "var(--text-muted)", letterSpacing: 0 }}>
+                            {correct}/{roundSeries.filter((rs) => picks[p]?.[rs.id]).length}
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </Fragment>
               );
             })}
+
+            {/* Grand total row */}
+            <tr>
+              <td style={{
+                position: "sticky", left: 0, zIndex: 1,
+                background: "var(--text)",
+                color: "var(--bg-card)",
+                borderRight: "1px solid var(--text)",
+                fontFamily: "Bebas Neue, sans-serif",
+                letterSpacing: "0.1em",
+                fontSize: "0.9rem",
+              }}>
+                GRAND TOTAL
+              </td>
+              {PLAYERS.map((p) => (
+                <td key={p} style={{
+                  background: "var(--text)",
+                  color: "var(--bg-card)",
+                  textAlign: "center",
+                  fontFamily: "Bebas Neue, sans-serif",
+                  fontSize: "1.3rem",
+                  letterSpacing: "0.04em",
+                }}>
+                  {totals.overall[p]}
+                </td>
+              ))}
+            </tr>
           </tbody>
         </table>
       </div>
