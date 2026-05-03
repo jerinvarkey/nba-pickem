@@ -322,7 +322,7 @@ export default function HomePage() {
       <header className="header">
         <div className="header-mark">ST. G&apos;S</div>
         <h1>NBA <em>Pick&apos;em</em> 2026</h1>
-        <div className="header-sub">Series picks. Underdogs pay.</div>
+       
       </header>
 
       {/* Login bar */}
