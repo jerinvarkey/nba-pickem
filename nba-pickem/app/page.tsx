@@ -40,6 +40,7 @@ export default function HomePage() {
   const [loaded, setLoaded] = useState(false);
   const [liveStatus, setLiveStatus] = useState<Record<string, string>>({}); // seriesId -> "Q3 4:22"
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
+  const [gameCount, setGameCount] = useState<number | null>(null);
 
   // Refs let the ESPN polling loop see latest state/updater without re-subscribing
   const seriesStateRef = useRef<Record<string, SeriesState>>({});
@@ -100,6 +101,7 @@ export default function HomePage() {
     const tick = async () => {
       const games = await fetchNBAScoreboard();
       if (cancelled) return;
+      setGameCount(games.length);
       const built = INITIAL_SERIES.map((s) => {
         const st = seriesStateRef.current[s.id];
         return st
@@ -113,12 +115,12 @@ export default function HomePage() {
         if (u.statusDetail) newLive[u.seriesId] = u.statusDetail;
         const cur = seriesStateRef.current[u.seriesId];
         const desired: Partial<SeriesState> = {};
-        // Once a winner is locked in (by admin or ESPN), don't touch the series anymore
-        if (cur?.winner) continue;
+        // Always update game1Started + score from ESPN. NEVER overwrite an
+        // existing winner (admin's manual call wins). Only fill winner if empty.
         if (u.game1Started && !cur?.game1Started) desired.game1Started = true;
         if (typeof u.highWins === "number" && u.highWins !== (cur?.highWins ?? 0)) desired.highWins = u.highWins;
         if (typeof u.lowWins === "number" && u.lowWins !== (cur?.lowWins ?? 0)) desired.lowWins = u.lowWins;
-        if (u.winner && u.winner !== (cur?.winner ?? null)) desired.winner = u.winner;
+        if (u.winner && !cur?.winner) desired.winner = u.winner;
         if (Object.keys(desired).length > 0) {
           // fire-and-forget; updateSeriesState persists
           updateSeriesStateRef.current(u.seriesId, desired);
@@ -479,7 +481,7 @@ export default function HomePage() {
 
       <footer className="footer">
         ST. G&apos;S NBA PICK&apos;EM • 2026 PLAYOFFS{!hasSupabase && " • LOCAL MODE (NO SUPABASE)"}
-        {lastFetch && <> • LIVE SYNCED {lastFetch.toLocaleTimeString()}</>}
+        {lastFetch && <> • ESPN SYNC {lastFetch.toLocaleTimeString()}{gameCount !== null && ` (${gameCount} games)`}</>}
       </footer>
     </div>
   );

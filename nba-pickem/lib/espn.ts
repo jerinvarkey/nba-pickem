@@ -1,8 +1,12 @@
-// ESPN NBA scoreboard integration
-// Match live games to our hardcoded series by team abbreviation pairs.
+// ESPN NBA scoreboard integration.
+// Strategy: pull every playoff-window game from ESPN, count game-level wins
+// per matchup, and aggregate into series-level state. This avoids fragile
+// "series note" string parsing and works for completed series too.
 
 import { TEAMS, type Series } from "./bracket";
 
+// 2026 playoffs began April 18.
+const PLAYOFFS_START = "20260418";
 const SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard";
 
 export type LiveGame = {
@@ -11,15 +15,28 @@ export type LiveGame = {
   homeAbbr: string;
   awayScore: number;
   homeScore: number;
+  winnerAbbr: string | null; // null if not final
   status: "scheduled" | "in_progress" | "final";
   statusDetail: string;
   startTime: string;
-  seriesNote: string; // e.g. "Pistons lead series 3-2", "Series tied 3-3"
 };
 
-export async function fetchNBAScoreboard(): Promise<LiveGame[]> {
+function fmtDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}${m}${day}`;
+}
+
+function today(): string {
+  return fmtDate(new Date());
+}
+
+// One scoreboard fetch with optional date range.
+async function fetchOneRange(dates: string): Promise<LiveGame[]> {
   try {
-    const r = await fetch(SCOREBOARD_URL, { cache: "no-store" });
+    const url = `${SCOREBOARD_URL}?dates=${dates}`;
+    const r = await fetch(url, { cache: "no-store" });
     if (!r.ok) return [];
     const d = await r.json();
     const events = (d?.events || []) as any[];
@@ -34,18 +51,27 @@ export async function fetchNBAScoreboard(): Promise<LiveGame[]> {
       const stateRaw: string = ev?.status?.type?.state || "";
       const status: LiveGame["status"] =
         stateRaw === "in" ? "in_progress" : stateRaw === "post" ? "final" : "scheduled";
-      const notes = (comp.notes || []) as any[];
-      const seriesNote = notes.map((n: any) => n.headline || "").join(" • ");
+      const homeAbbr = home.team?.abbreviation || "";
+      const awayAbbr = away.team?.abbreviation || "";
+      const homeScore = Number(home.score || 0);
+      const awayScore = Number(away.score || 0);
+      let winnerAbbr: string | null = null;
+      if (status === "final") {
+        if (home.winner === true) winnerAbbr = homeAbbr;
+        else if (away.winner === true) winnerAbbr = awayAbbr;
+        else if (homeScore > awayScore) winnerAbbr = homeAbbr;
+        else if (awayScore > homeScore) winnerAbbr = awayAbbr;
+      }
       games.push({
         gameId: String(ev.id || comp.id || ""),
-        awayAbbr: away.team?.abbreviation || "",
-        homeAbbr: home.team?.abbreviation || "",
-        awayScore: Number(away.score || 0),
-        homeScore: Number(home.score || 0),
+        awayAbbr,
+        homeAbbr,
+        awayScore,
+        homeScore,
+        winnerAbbr,
         status,
         statusDetail: ev?.status?.type?.shortDetail || "",
         startTime: ev?.date || comp.date || "",
-        seriesNote,
       });
     }
     return games;
@@ -54,44 +80,32 @@ export async function fetchNBAScoreboard(): Promise<LiveGame[]> {
   }
 }
 
-// Parse a series note like "Pistons lead series 3-2" or "Series tied 3-3" or "Magic win series 4-2"
-// Returns series wins for the team whose city/name matches `winningName`, plus the other side's wins.
-export function parseSeriesNote(
-  note: string,
-  highTeamName: string,
-  lowTeamName: string
-): { highWins: number; lowWins: number; winner: string | null } | null {
-  if (!note) return null;
-  const m = note.match(/(\d+)\s*[-–]\s*(\d+)/);
-  if (!m) return null;
-  const a = parseInt(m[1], 10);
-  const b = parseInt(m[2], 10);
-  // Determine which side is leading from the wording
-  const lower = note.toLowerCase();
-  const tied = /tied/i.test(lower);
-  const won = /(win|wins|won)\s+series/i.test(lower);
-  const leads = /lead/i.test(lower);
+// Pull all playoff-window games. Try the date range first; if ESPN ignores
+// the range, fall back to fetching each day individually (slower but works).
+export async function fetchNBAScoreboard(): Promise<LiveGame[]> {
+  const range = `${PLAYOFFS_START}-${today()}`;
+  let games = await fetchOneRange(range);
+  if (games.length >= 2) return games; // got something useful
 
-  // First number is the leading/winning team's wins. If tied, both equal.
-  if (tied) {
-    return { highWins: a, lowWins: a, winner: null };
+  // Fallback: walk day-by-day from playoffs start to today
+  const start = new Date(2026, 3, 18); // April 18 2026
+  const end = new Date();
+  const collected: LiveGame[] = [];
+  const seen = new Set<string>();
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const dayGames = await fetchOneRange(fmtDate(cursor));
+    for (const g of dayGames) {
+      if (!seen.has(g.gameId)) {
+        seen.add(g.gameId);
+        collected.push(g);
+      }
+    }
+    cursor.setDate(cursor.getDate() + 1);
   }
-
-  // Find which team's name appears first in the note - that's the leader.
-  const idxHigh = lower.indexOf(highTeamName.toLowerCase());
-  const idxLow = lower.indexOf(lowTeamName.toLowerCase());
-  let highIsLeader = false;
-  if (idxHigh >= 0 && idxLow >= 0) highIsLeader = idxHigh < idxLow;
-  else if (idxHigh >= 0) highIsLeader = true;
-  else if (idxLow >= 0) highIsLeader = false;
-  else if (leads || won) return null; // can't determine
-
-  const winner = won ? (highIsLeader ? highTeamName : lowTeamName) : null;
-  if (highIsLeader) return { highWins: a, lowWins: b, winner: winner ? "high" : null };
-  return { highWins: b, lowWins: a, winner: winner ? "low" : null };
+  return collected;
 }
 
-// Match live games to series and produce updates
 export type SeriesAutoUpdate = {
   seriesId: string;
   game1Started?: boolean;
@@ -101,6 +115,7 @@ export type SeriesAutoUpdate = {
   statusDetail?: string;
 };
 
+// Aggregate game-level wins into series state.
 export function matchGamesToSeries(games: LiveGame[], series: Series[]): SeriesAutoUpdate[] {
   const updates: SeriesAutoUpdate[] = [];
   for (const s of series) {
@@ -108,39 +123,42 @@ export function matchGamesToSeries(games: LiveGame[], series: Series[]): SeriesA
     const high = TEAMS[s.highSeed];
     const low = TEAMS[s.lowSeed];
     if (!high || !low) continue;
+
     const matching = games.filter((g) => {
       const pair = new Set([g.awayAbbr, g.homeAbbr]);
       return pair.has(high.abbr) && pair.has(low.abbr);
     });
     if (matching.length === 0) continue;
 
-    // game1Started: any matched game is in progress or final
-    const anyStarted = matching.some((g) => g.status === "in_progress" || g.status === "final");
-
-    // Use the most informative series note (longest one usually has the latest count)
-    const noteCandidate = matching
-      .map((g) => g.seriesNote)
-      .filter(Boolean)
-      .sort((a, b) => b.length - a.length)[0];
-
-    let parsed: ReturnType<typeof parseSeriesNote> = null;
-    if (noteCandidate) {
-      parsed = parseSeriesNote(noteCandidate, high.name, low.name);
+    let highWins = 0;
+    let lowWins = 0;
+    for (const g of matching) {
+      if (g.status === "final" && g.winnerAbbr) {
+        if (g.winnerAbbr === high.abbr) highWins++;
+        else if (g.winnerAbbr === low.abbr) lowWins++;
+      }
     }
+
+    const anyStarted = matching.some((g) => g.status === "in_progress" || g.status === "final");
+    let winner: string | null = null;
+    if (highWins >= 4) winner = high.key;
+    else if (lowWins >= 4) winner = low.key;
+
+    const inProgress = matching.find((g) => g.status === "in_progress");
+    const mostRecentFinal = matching
+      .filter((g) => g.status === "final")
+      .sort((a, b) => (b.startTime || "").localeCompare(a.startTime || ""))[0];
+    const nextScheduled = matching
+      .filter((g) => g.status === "scheduled")
+      .sort((a, b) => (a.startTime || "").localeCompare(b.startTime || ""))[0];
+    const statusDetail = inProgress?.statusDetail || mostRecentFinal?.statusDetail || nextScheduled?.statusDetail || "";
 
     const update: SeriesAutoUpdate = { seriesId: s.id };
     if (anyStarted) update.game1Started = true;
-    if (parsed) {
-      update.highWins = parsed.highWins;
-      update.lowWins = parsed.lowWins;
-      // Determine winner if a side hit 4
-      if (parsed.highWins >= 4) update.winner = high.key;
-      else if (parsed.lowWins >= 4) update.winner = low.key;
-    }
-    // Most recent live status detail
-    const liveOrFinal = matching.find((g) => g.status === "in_progress") || matching.find((g) => g.status === "final");
-    if (liveOrFinal) update.statusDetail = liveOrFinal.statusDetail;
-
+    update.highWins = highWins;
+    update.lowWins = lowWins;
+    if (winner) update.winner = winner;
+    if (statusDetail) update.statusDetail = statusDetail;
     updates.push(update);
   }
   return updates;
